@@ -1,0 +1,168 @@
+
+import telebot
+import time
+import datetime
+import threading
+import logging
+import re
+
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+BOT_TOKEN = "8372155298:AAF9jOlMbp5qAcVfhMvYDOg9bfF8-SOjUk4"
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+timers = {}  
+timer_id_counter = 1
+
+def start_timer(chat_id, timer_id, duration, message_id):
+    try:
+        time.sleep(duration)
+        bot.send_message(chat_id, f"Таймер {timer_id} истек!")
+        bot.delete_message(chat_id=chat_id, message_id=message_id)
+        if chat_id in timers and timer_id in timers[chat_id]:
+            del timers[chat_id][timer_id]
+            if not timers[chat_id]:
+                del timers[chat_id]
+    except Exception as e:
+        logging.error(f"Ошибка в таймере {timer_id}: {e}")
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(message.chat.id, "Привет! Я бот-таймер. Используйте команды:\n"
+                     "/timer <количество секунд> - установить таймер на N секунд.\n"
+                     "/time <ЧЧ:ММ:СС> или <ЧЧ:ММ> - установить таймер на указанное время.\n"
+                     "/list - список активных таймеров.\n"
+                     "/stop <timer_id> - остановить таймер по ID.\n")
+
+@bot.message_handler(commands=['timer'])
+def set_timer_seconds(message):
+    """Установка таймера в секундах."""
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "Используйте команду /timer <количество секунд> (например, /timer 60).")
+            return
+
+        duration = int(parts[1])
+
+        if duration <= 0:
+            bot.reply_to(message, "Пожалуйста, укажите положительное число секунд.")
+            return
+
+        chat_id = message.chat.id
+        message_id = message.message_id
+        global timer_id_counter
+        timer_id = timer_id_counter
+        timer_id_counter += 1
+
+        if chat_id not in timers:
+            timers[chat_id] = {}
+
+        timers[chat_id][timer_id] = {"duration": duration, "start_time": datetime.datetime.now(), "message_id": message_id}
+
+        bot.reply_to(message, f"Таймер {timer_id} установлен на {duration} секунд.")
+
+        timer_thread = threading.Thread(target=start_timer, args=(chat_id, timer_id, duration, message_id))
+        timer_thread.start()
+
+    except ValueError:
+        bot.reply_to(message, "Пожалуйста, введите целое число секунд после команды /timer.")
+    except Exception as e:
+        logging.error(f"Ошибка при установке таймера: {e}")
+        bot.reply_to(message, "Произошла ошибка при установке таймера.")
+
+@bot.message_handler(commands=['time'])
+def set_timer_time(message):
+    """Установка таймера на конкретное время."""
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "Используйте команду /time <ЧЧ:ММ:СС> или <ЧЧ:ММ> (например, /time 15:30).")
+            return
+
+        time_str = parts[1]
+        time_format = "%H:%M:%S" if ":" in time_str and len(time_str.split(":")) == 3 else "%H:%M"
+
+        try:
+            target_time = datetime.datetime.strptime(time_str, time_format).time()
+        except ValueError:
+            bot.reply_to(message, "Неверный формат времени. Используйте ЧЧ:ММ:СС или ЧЧ:ММ.")
+            return
+
+        now = datetime.datetime.now()
+        target_datetime = datetime.datetime.combine(now.date(), target_time)
+
+        if target_datetime <= now:
+            target_datetime = target_datetime + datetime.timedelta(days=1)  # Переносим на следующий день
+
+        duration = (target_datetime - now).total_seconds()
+
+        if duration <= 0:
+            bot.reply_to(message, "Указанное время уже прошло.")
+            return
+
+        chat_id = message.chat.id
+        message_id = message.message_id
+        global timer_id_counter
+        timer_id = timer_id_counter
+        timer_id_counter += 1
+
+        if chat_id not in timers:
+            timers[chat_id] = {}
+
+        timers[chat_id][timer_id] = {"duration": duration, "start_time": datetime.datetime.now(), "message_id": message_id}
+
+        bot.reply_to(message, f"Таймер {timer_id} установлен на {time_str}.")
+
+        timer_thread = threading.Thread(target=start_timer, args=(chat_id, timer_id, duration, message_id))
+        timer_thread.start()
+
+    except Exception as e:
+        logging.error(f"Ошибка при установке таймера по времени: {e}")
+        bot.reply_to(message, "Произошла ошибка при установке таймера по времени.")
+
+@bot.message_handler(commands=['list'])
+def list_timers(message):
+    """Вывод списка активных таймеров."""
+    chat_id = message.chat.id
+    if chat_id in timers and timers[chat_id]:
+        response = "Активные таймеры:\n"
+        for timer_id, timer_info in timers[chat_id].items():
+            remaining_time = timer_info["start_time"] + datetime.timedelta(seconds=timer_info["duration"]) - datetime.datetime.now()
+            remaining_seconds = int(remaining_time.total_seconds())
+            response += f"{timer_id}: Осталось {remaining_seconds} секунд\n"
+        bot.reply_to(message, response)
+    else:
+        bot.reply_to(message, "Нет активных таймеров.")
+
+@bot.message_handler(commands=['stop'])
+def stop_timer(message):
+    """Остановка таймера по ID."""
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "Используйте команду /stop <timer_id> (например, /stop 1).")
+            return
+
+        timer_id = int(parts[1])
+        chat_id = message.chat.id
+
+        if chat_id in timers and timer_id in timers[chat_id]:
+            del timers[chat_id][timer_id]
+            if not timers[chat_id]:
+                del timers[chat_id]
+            bot.reply_to(message, f"Таймер {timer_id} остановлен.")
+        else:
+            bot.reply_to(message, f"Таймер {timer_id} не найден.")
+
+    except ValueError:
+        bot.reply_to(message, "Пожалуйста, введите целое число после команды /stop.")
+    except Exception as e:
+        logging.error(f"Ошибка при остановке таймера: {e}")
+        bot.reply_to(message, "Произошла ошибка при остановке таймера.")
+
+if __name__ == '__main__':
+    logging.info("Бот запущен...")
+    bot.infinity_polling()
